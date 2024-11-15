@@ -4,6 +4,8 @@
 #include <opencv2/imgproc/types_c.h>
 #include <opencv2/highgui/highgui_c.h>
 #include <opencv2/imgcodecs.hpp>
+#include <sys/types.h>
+#include <dirent.h>
 
 const char* colorString = { "rgbuwc" };
 
@@ -35,6 +37,22 @@ int getFileNames(const char* folder, std::vector<std::string>& filenames)
 }
 #endif
 
+int getFileNames(const char* folder, std::vector<std::string>& filenames)
+{
+	DIR* dirp = opendir(folder);
+	if (dirp == nullptr) {
+		return 0;
+	}
+
+	struct dirent* dp;
+	while ((dp = readdir(dirp)) != nullptr) {
+		if (dp->d_type == DT_REG && strcmp(dp->d_name, ".DS_Store") != 0) {
+			filenames.push_back(std::string(folder) + "/" + dp->d_name);
+		}
+	}
+	closedir(dirp);
+	return (int)filenames.size();
+}
 
 void CardData::MakeHash()
 {
@@ -45,9 +63,7 @@ void CardData::MakeHash()
 			return;
 		}
 
-		float offset = 0.0f;// 
-		float part = 1.0f;// 
-		cv::Rect subRect(cv::Rect((int)(myInputImage.cols*offset), (int)(myInputImage.cols*offset), (int)(myInputImage.cols*part), (int)(myInputImage.cols*part*0.85f)));
+		cv::Rect subRect(cv::Rect(0, 0, (int)(myInputImage.cols), (int)(myInputImage.cols*0.85f)));
 		cv::Mat inputsub(myInputImage, subRect);
 		cv::resize(inputsub, myIcon, cv::Size(ImageHash::BITS, ImageHash::BITS), 0, 0, cv::INTER_AREA);
 	}
@@ -154,7 +170,8 @@ void ImageHash::MakeHash(const cv::Mat& iImage)
 		{
 			cv::Mat(iImage, cv::Rect(x * CELLBITS, y * CELLBITS, CELLBITS, CELLBITS)).copyTo(subrect);
 
-			int* blocks = &temphash[GetBitIndexFromGridPosition(x, y)];
+			int bitIndex = GetBitIndexFromGridPosition(x, y);
+			int* blocks = &temphash[bitIndex];
 			for (int i = 0; i < CELLBITS * CELLBITS; i++)
 			{
 				blocks[i] = subrect.data[i];
@@ -169,5 +186,11 @@ void ImageHash::MakeHash(const cv::Mat& iImage)
 
 		}
 	}
+	// std::cout << "Temp Hash:";
+	// for (int n = 0; n < BITS * BITS; n++)
+	// {
+	// 	std::cout << temphash[n];
+	// }
+	// std::cout << std::endl;
 	Make32(myHash32, temphash, BITS*BITS);
 }

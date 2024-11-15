@@ -7,6 +7,7 @@
 #include <opencv2/photo/photo.hpp>
 #include <vector>
 #include <memory>
+#include <string>
 #pragma warning(disable:4996)
 
 inline int median(int *data, int n)
@@ -32,13 +33,17 @@ inline int NumberOfSetBits(uint32_t i)
 	return (((i + (i >> 4)) & 0x0F0F0F0F) * 0x01010101) >> 24;
 }
 
-inline int hammingDistance(const int* hash, const int* hash2, int length)
+inline int hammingDistance(const int* hash, const int* hash2, int length, bool log = false)
 {
 	int distance = 0;
 	for (int i = 0; i < length; ++i)
 	{
 		int xord = hash[i] ^ hash2[i];
 		int offbits = NumberOfSetBits(xord);
+		if (log)
+		{
+			printf("hash[%2i] = %10x (%12d), hash2[%i] = %10x (%12d), xord = %10x (%12d), offbits = %i\n", i, hash[i], hash[i], i, hash2[i], hash2[i], xord, xord, offbits);
+		}
 		distance += offbits;
 	}
 	return distance;
@@ -83,9 +88,9 @@ struct ImageHash
 		return GetGridDistance(anOther, 1, 1);
 	}
 
-	int HammingDistance(const ImageHash& anOther) const
+	int HammingDistance(const ImageHash& anOther, bool log = false) const
 	{
-		return hammingDistance(&myHash32[0], &anOther.myHash32[0], mysize);
+		return hammingDistance(&myHash32[0], &anOther.myHash32[0], mysize, log);
 	}
 
 	void Make32(int* hash32, const int* hash, const int aLength) const
@@ -105,6 +110,18 @@ struct ImageHash
 				hashValue |= ((int)1) << bit;
 			}
 		}
+	}
+
+	std::string ToString() const
+	{
+		std::string hash = "";
+		for (int i = 0; i < 32; ++i)
+		{
+			char buffer[9];
+			snprintf(buffer, 9, "%08x", myHash32[i]);
+			hash.append(buffer);
+		}
+		return hash;
 	}
 
 	void MakeHash(const cv::Mat& iImage);
@@ -220,7 +237,6 @@ struct Match
 	}
 
 	const CardData* myDatabaseCard;
-	int myIteration;
 	int myPotentialRectIndex;
 	const static int SCORES = 2;
 	float myScore[SCORES];

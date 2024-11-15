@@ -3,7 +3,6 @@
 
 #include "QueryThread.h"
 #include "CardDatabase.h"
-#include <windows.h>
 
 //#pragma optimize("",off)
 const char* cardPool = "priest of titania";
@@ -12,18 +11,34 @@ Query query(gDatabase);
 
 int main()
 {
+	std::cout << "Started test stuff" << std::endl;
+
 	gDatabase.LoadFromTextFile("magic.db");
 	cv::setUseOptimized(false);
 	cv::setNumThreads(1);
 	query.myOkMatchScore = 280;
-	static bool videoTest = true;
-	static bool clickTest = false;
+	query.bDebug = true;
+	static bool videoTest = false;
+	static bool clickTest = true;
 	static bool singleTest = false;
+	// Original values:
+	// Min: 0.050000, Max: 0.200000
+	printf("Pre: Min: %f, Max: %f\n", query.myMinCardHeightRelative, query.myMaxCardHeightRelative);
+
 	if (singleTest)
 	{
+		float originalMin = query.myMinCardHeightRelative;
+		float originalMax = query.myMaxCardHeightRelative;
 		query.myMinCardHeightRelative = 0.5f;
 		query.myMaxCardHeightRelative = 0.7f;
 		query.TestFile("Regression/priest of titania.png");
+
+		query.myMinCardHeightRelative = originalMin;
+		query.myMaxCardHeightRelative = originalMax;
+
+		// query.TestFile("Regression/tarfire.png");
+		// std::cout << "Finished single test, exiting" << std::endl;
+		// exit(29);
 	}
 	const int before = TimeNow();
 
@@ -83,23 +98,33 @@ int main()
 
 		for (const std::string& file : filenames)
 		{
+			// if (file.rfind("wildspeaker") == -1) {
+			// 	continue;
+			// }
 			cv::Mat screen = cv::imread(file);
+			// std::cout << "Rows " << screen.rows << " Cols " << screen.cols << std::endl;
+
 			++tests;
 			if (query.TestFile(file, false))
 			{
 				++succeeded;
 			}
+
+			// if(tests > 3) {
+			// 	printf("WARNING: TODO: Breaking out of testing clicks early.\n");
+			// 	break;
+			// }
 		}
 	}
 
 	std::cout << succeeded << "/" << tests << " in " << (TimeNow() - before) << "ms ";
 
-	std::ostringstream os_;
-	os_ << succeeded << "/" << tests << " in " << (TimeNow() - before) << "ms ";
-	OutputDebugString(os_.str().c_str());
+	// std::ostringstream os_;
+	// os_ << succeeded << "/" << tests << " in " << (TimeNow() - before) << "ms ";
+	// OutputDebugString(os_.str().c_str());
 
-	int x;
-	std::cin >> x;
+	// int x;
+	// std::cin >> x;
 	return 0;
 }
 

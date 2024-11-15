@@ -3,9 +3,14 @@
 #include "CardData.h"
 #include "CardDatabase.h"
 #include <mutex>
+#include <format>
 #include <opencv2/photo/photo.hpp>
 #include <opencv2/imgproc/types_c.h>
 #include <iterator>
+#include <openssl/md5.h>
+#include <iostream>
+#include <fstream>
+#include <iomanip>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -24,6 +29,8 @@ extern std::mutex g_resultsMutex;
 #ifndef min
 #define min(a,b) (((a) < (b)) ? (a) : (b))
 #endif
+
+const bool MATCH_DEBUG = false;
 
 enum OPERATOR
 {
@@ -178,6 +185,7 @@ std::string Query::TestBuffer(unsigned char* aBuffer, int aWidth, int aHeight)
 	return "fail";
 }
 
+// This is the main test function that we need to emulate.
 bool Query::TestFile(const std::string &file, bool aMatchingNameOnly/*=false*/)
 {
 	const int start = (int)file.find_last_of("/") + 1;
@@ -206,12 +214,14 @@ bool Query::TestFile(const std::string &file, bool aMatchingNameOnly/*=false*/)
 	{
 		const int before = TimeNow();
 		FindCardInRoiAndPrint(primeCase, myCardDatabase.myCardLists, result);
-		std::cout << (TimeNow() - before) << "ms ";
+		// std::cout << "Time took for matching name:" << (TimeNow() - before) << "ms ";
+		// std::cout << "TODO: (TESTONLY) Exiting early" << std::endl;
+		// exit(19);
 	}
 	std::cout << std::endl;
 
 	Result extraResult;
-	static bool testIndividual = true;
+	static bool testIndividual = false;
 	if (testIndividual)
 	{
 		int savedOkMatchScore = myOkMatchScore;
@@ -238,7 +248,7 @@ bool Query::TestFile(const std::string &file, bool aMatchingNameOnly/*=false*/)
 
 	if (fIndex == 0)
 	{
-		std::cout << "[Success] Score: " << result.myMatch.myList[fIndex].myScore[0] << " Quick:" << result.myMatch.myList[fIndex].myScore[1] << " Path:" << result.myMatch.myList[fIndex].myInput.myDebugPath;
+		std::cout << "[Success] Score: " << result.myMatch.myList[fIndex].myScore[0] << " Quick: " << result.myMatch.myList[fIndex].myScore[1] << " Path:" << result.myMatch.myList[fIndex].myInput.myDebugPath;
 	}
 	else
 	{
@@ -415,12 +425,10 @@ cv::Mat getRotatedRectImage(const cv::RotatedRect& aRect, const cv::Mat& anImage
 	rotation.at<double>(0, 2) -= wdiff; //Adjust the rotation point to the middle of the dst image
 	rotation.at<double>(1, 2) -= hdiff;
 
+	// std::cout << "Calculated rotation matrix:" << rotation << std::endl;
+
 	// perform the affine transformation
 	cv::warpAffine(anImage, rotated, rotation, rotated.size(), cv::INTER_LANCZOS4);
-#ifdef DEBUGIMAGES
-	cv::Mat debugRect = rotated;
-#endif
-
 	return rotated;
 }
 
@@ -578,13 +586,36 @@ bool Query::FindBestMatch(std::vector<PotentialCardMatches>& underMouseCards, co
 	}
 
 	int worst = myOkMatchScore;
+	// printf("Ok match score: %i\n", myOkMatchScore);
+
 	const int earlyOutScore = 200;
+
+	// std::cout << "Found potential card matches: " << underMouseCards.size() << std::endl;
+	// cv::imwrite("/Users/val/dev/cardspotter/data/around_card_area.png", aroundCardArea);
+	nlohmann::json j = nlohmann::json::object();
+	j["potential_card_matches"] = nlohmann::json::array();
+
+	for (int inputIndex = 0; inputIndex < underMouseCards.size(); ++inputIndex)
+	{
+		PotentialCardMatches& pcm = underMouseCards[inputIndex];
+		j["potential_card_matches"].push_back(pcm.toJson());
+
+
+		// printf("Potential card match: %i has %i potential rects\n", inputIndex, pcm.myCard.myPotenatialRects.size());
+	}
+
+	std::ofstream fPot("cpp_potential_card_matches.json");
+	fPot << j.dump(2) << std::endl;
+	// std::cout << j.dump(2) << std::endl;
+	// exit(1);
 
 	int listSize = (int)underMouseCards.size();
 	for (int inputIndex = 0; inputIndex < listSize; ++inputIndex)
 	{
 		for (int rectIndex = 0, e= underMouseCards[inputIndex].myCard.myPotenatialRects.size(); rectIndex < e; ++rectIndex)
 		{
+			if (MATCH_DEBUG)
+				std::cout << "Examining potential card match: " << inputIndex << " of " << underMouseCards.size() << ", rect: " << rectIndex << " of " << underMouseCards[inputIndex].myCard.myPotenatialRects.size() << std::endl;
 			PotentialRect potentialRect = underMouseCards[inputIndex].myCard.myPotenatialRects[rectIndex];
 			if (!potentialRect.myVariations.size())
 			{
@@ -593,13 +624,18 @@ bool Query::FindBestMatch(std::vector<PotentialCardMatches>& underMouseCards, co
 
 			std::vector<Match>& matchList = underMouseCards[inputIndex].myList;
 			worst = FindPotentialRectMatches(potentialRect, iCardSets, worst, matchList);
+			if (MATCH_DEBUG)
+				printf("Worst score: %i. Match count: %i\n", worst, matchList.size());
 			for (Match& m : matchList)
 			{
 				m.myPotentialRectIndex = rectIndex;
 			}
 
-			if (worst < earlyOutScore && worst < myGoodMatchScore)
+			if (worst < earlyOutScore && worst < myGoodMatchScore) {
+				if (MATCH_DEBUG)
+					std::cout << "Breaking from loop early. Worst: " << worst << " Early: " << earlyOutScore << " GoodMatch: " << myGoodMatchScore << " inputIndex: " << inputIndex << " rectIndex: " << rectIndex << std::endl;
 				break;
+			}
 		}
 	}
 
@@ -614,7 +650,7 @@ bool Query::FindBestMatch(std::vector<PotentialCardMatches>& underMouseCards, co
 		return lhs.myScore < rhs.myScore;
 	};
 	std::sort(underMouseCards.begin(), underMouseCards.end(), scoreSort);
-	
+
 	const PotentialCardMatches& bestMatch = underMouseCards[0];
 	if (bestMatch.myList.size())
 	{
@@ -635,25 +671,43 @@ bool Query::FindBestMatch(std::vector<PotentialCardMatches>& underMouseCards, co
 
 int Query::FindPotentialRectMatches(PotentialRect& aPotentialRect, const std::vector<const CardList*>& iCardSets, int aWorst, std::vector<Match>& oMatchList)
 {
-	const int quickCap = myOkMatchScore / 18;//14; //16 gives +30% at 
+	const int quickCap = myOkMatchScore / 18;//14; //16 gives +30% at
 	const bool useEarlyOut = myGoodMatchScore < 200;
 
 	int bestHamming = aWorst;
 	int bestQuick = -1;
 	const CardData* bestCard = nullptr;
 	int bestVariation = -1;
+	// printf("The quick cap is: %i\n", quickCap);
+
+	// for (int x = 0; x < aPotentialRect.myVariations.size(); x++)
+	// {
+	// 	CardInput& input = aPotentialRect.myVariations[x];
+	// 	CardData& queryCard = input.myQuery;
+	// 	const ImageHash queryHash = queryCard.GetHash();
+	// 	std::cout << "x: " << x << " Query hash: " << queryHash.ToString() << std::endl;
+
+	// 	std::string variationPath = "/Users/val/dev/cardspotter/data/variation_" + std::to_string(x) + ".png";
+	// 	cv::imwrite(variationPath, queryCard.myInputImage);
+	// }
+	// exit(13);
 
 	for (int x = 0, xe = (int)aPotentialRect.myVariations.size(); x < xe; ++x)
 	{
+		// std::cout << "Checking variation " << x << " of " << aPotentialRect.myVariations.size() << std::endl;
 		CardInput& input = aPotentialRect.myVariations[x];
 		CardData& queryCard = input.myQuery;
 #ifdef DEBUGIMAGES
 		cv::Mat debugMatch = queryCard.myInputImage;
 #endif
 		const ImageHash queryHash = queryCard.GetHash();
+		// std::cout << "x: " << x << " Query hash: " << queryHash.ToString() << " Rect: " << input.myRect.center.x << ", " << input.myRect.center.y << std::endl;
+		// cv::imwrite("input.png", queryCard.myInputImage);
+		// cv::imwrite("icon.png", queryCard.myIcon);
 
-		for (const CardList* cardSet : iCardSets)
+		for (int cs_idx = 0; cs_idx < iCardSets.size(); cs_idx++)
 		{
+			const CardList* cardSet = iCardSets[cs_idx];
 			for (int i = 0, e = (int)cardSet->myCardData.size(); i < e; ++i)
 			{
 				const ImageHash& dbHash = cardSet->myHashes[i];
@@ -664,9 +718,13 @@ int Query::FindPotentialRectMatches(PotentialRect& aPotentialRect, const std::ve
 				}
 
 				int hamming = dbHash.HammingDistance(queryHash);
+				// std::cout << "x: " << x << " i: " << i << " cs_idx: " << cs_idx << " Quick: " << quickHamming << " Hamming: " << hamming << std::endl;
 
 				if (hamming < bestHamming)
 				{
+					if (MATCH_DEBUG)
+						printf("Updating best match to: quick: %i, hamming: %i, card name: %s (id: %s), variation: %i\n",
+							quickHamming, hamming, cardSet->myCardData[i]->myCardName.c_str(), cardSet->myCardData[i]->myCardId.c_str(), x);
 					bestQuick = quickHamming;
 					bestHamming = hamming;
 					bestCard = cardSet->myCardData[i];
@@ -718,7 +776,13 @@ bool Query::FindCardInRoiAndPrint(const cv::Mat& source, const std::vector<const
 {
 	UpdateSearchSettings();
 	cv::Mat resized;
-	cv::resize(source, resized, cv::Size(source.size().width * myScreenScale, source.size().height * myScreenScale), cv::INTER_LANCZOS4);
+
+	// This DOES resize the image.
+	// Warning: The cv::INTER_LANCZOS4 doesn't actually do anything...
+	// It's using the default interpolation method.
+	// printf("Resizing to width: %f, height: %f. Screen Scale: %f (Original width: %d, Original Height: %d)\n", source.size().width * myScreenScale, source.size().height * myScreenScale, myScreenScale, source.size().width, source.size().height);
+	cv::resize(source, resized, cv::Size(source.size().width * myScreenScale, source.size().height * myScreenScale));
+	// cv::imwrite("resized.png", resized);
 
 	if (FindCardInRoi(mySettings, iCardSets, resized, true, r))
 	{
@@ -846,6 +910,9 @@ void Query::UpdateSearchSettings()
 {
 	UpdateScreenScale();
 	mySettings.SetMinMax(myScreenScale * float(VIDEOHEIGHT) * myMinCardHeightRelative, myScreenScale * float(VIDEOHEIGHT) * myMaxCardHeightRelative);
+	// std::cout << "Min Card Height: " << mySettings.myMinCardHeight << " Max Card Height: " << mySettings.myMaxCardHeight << std::endl;
+	// std::cout << "Screen Scale: " << myScreenScale << std::endl;
+	// std::cout << "Card Height Relative: " << myMinCardHeightRelative << ", " << myMaxCardHeightRelative << std::endl;
 }
 
 void Query::UpdateScreenScale()
@@ -861,8 +928,12 @@ void Query::UpdateScreenScale()
 		}
 	}
 
-	if (screenScale != myScreenScale)
+	// std::cout << "Screen Scale " << screenScale << std::endl;
+
+	if (screenScale != myScreenScale) {
+		printf("Updated screen scale: %f\n", screenScale);
 		myScreenScale = screenScale;
+	}
 }
 
 bool Query::TestDiff(Result &oResult, const int aCurrentTime)
@@ -1131,6 +1202,7 @@ bool CreatePotentialRectFromPossibleTextBox(const float fullCardRatio, const cv:
 
 void addPotentialRects(const SearchSettings &inputs, cv::RotatedRect &rect, const std::string &path, const std::vector<cv::Point> &contour, std::vector<PotentialRect> &oPotentialRects)
 {
+	std::string currentPath = path + ".potential";
 	// 		if (inputs.myHeightSet)
 	{
 		if (inputs.IsValidWidthPermissive(rect.size.width))
@@ -1141,8 +1213,8 @@ void addPotentialRects(const SearchSettings &inputs, cv::RotatedRect &rect, cons
 			cv::Mat topRectMat = getRotatedRectImage(topRect, debugArea);
 			cv::Mat bottomRectMat = getRotatedRectImage(bottomRect, debugArea);
 #endif
-			AddRect(PotentialRect(topRect, path + ".wpwTop", contour), oPotentialRects);
-			AddRect(PotentialRect(bottomRect, path + ".wpwBot", contour), oPotentialRects);
+			AddRect(PotentialRect(topRect, currentPath + ".wpwTop", contour), oPotentialRects);
+			AddRect(PotentialRect(bottomRect, currentPath + ".wpwBot", contour), oPotentialRects);
 		}
 
 		if (inputs.IsValidHeightPermissive(rect.size.height))
@@ -1153,8 +1225,8 @@ void addPotentialRects(const SearchSettings &inputs, cv::RotatedRect &rect, cons
 			cv::Mat leftRectMat = getRotatedRectImage(leftRect, debugArea);
 			cv::Mat rightRectMat = getRotatedRectImage(rightRect, debugArea);
 #endif
-			AddRect(PotentialRect(leftRect, path + ".hphLeft", contour), oPotentialRects);
-			AddRect(PotentialRect(rightRect, path + ".hphRight", contour), oPotentialRects);
+			AddRect(PotentialRect(leftRect, currentPath + ".hphLeft", contour), oPotentialRects);
+			AddRect(PotentialRect(rightRect, currentPath + ".hphRight", contour), oPotentialRects);
 		}
 
 		if (inputs.IsValidWidthPermissive(rect.size.height))
@@ -1169,8 +1241,8 @@ void addPotentialRects(const SearchSettings &inputs, cv::RotatedRect &rect, cons
 			cv::Mat topRectMat = getRotatedRectImage(topRect, debugArea);
 			cv::Mat bottomRectMat = getRotatedRectImage(bottomRect, debugArea);
 #endif
-			AddRect(PotentialRect(topRect, path + ".wphTop", contour), oPotentialRects);
-			AddRect(PotentialRect(bottomRect, path + ".wphBot", contour), oPotentialRects);
+			AddRect(PotentialRect(topRect, currentPath + ".wphTop", contour), oPotentialRects);
+			AddRect(PotentialRect(bottomRect, currentPath + ".wphBot", contour), oPotentialRects);
 		}
 
 		if (inputs.IsValidHeightPermissive(rect.size.width))
@@ -1184,20 +1256,41 @@ void addPotentialRects(const SearchSettings &inputs, cv::RotatedRect &rect, cons
 			cv::Mat leftRectMat = getRotatedRectImage(leftRect, debugArea);
 			cv::Mat rightRectMat = getRotatedRectImage(rightRect, debugArea);
 #endif
-			AddRect(PotentialRect(leftRect, path + ".hpwLeft", contour), oPotentialRects);
-			AddRect(PotentialRect(rightRect, path + ".hpwRight", contour), oPotentialRects);
+			AddRect(PotentialRect(leftRect, currentPath + ".hpwLeft", contour), oPotentialRects);
+			AddRect(PotentialRect(rightRect, currentPath + ".hpwRight", contour), oPotentialRects);
 		}
 	}
 }
 
-void FindCardRectsInContours(const std::vector<std::vector<cv::Point>> &iContours, const SearchSettings inputs, const cv::Mat &aroundCardArea, std::vector<PotentialRect> &oGoodRects, std::vector<PotentialRect> *oPotentialRects, const std::string &path)
+void printRect(const cv::RotatedRect &rect)
 {
-	const double areaarea = aroundCardArea.size().area();
+	std::cout << std::hexfloat;
+	std::cout << "Center x: " << rect.center.x << std::endl;
+	std::cout << "Center y: " << rect.center.y << std::endl;
+	std::cout << "Width:    " << rect.size.width << std::endl;
+	std::cout << "Height:   " << rect.size.height << std::endl;
+	std::cout << "Angle:    " << rect.angle << std::endl;
+	std::cout << std::defaultfloat;
+}
+
+void FindCardRectsInContours(const std::vector<std::vector<cv::Point>> &iContours, const SearchSettings inputs, std::vector<PotentialRect> &oGoodRects, std::vector<PotentialRect> *oPotentialRects, const std::string &path)
+{
 	static std::vector<cv::Point> hull;
 	hull.clear();
 
-	for (const std::vector<cv::Point> &contour : iContours)
+	for (int i = 0; i < iContours.size(); i++)
 	{
+		char currentPath[256];
+		sprintf(currentPath, "%s.contour=%i", path.c_str(), i);
+		const std::vector<cv::Point> &contour = iContours[i];
+		// if (path == ".0" && i == 22) {
+		// 	for (int x = 0; x < contour.size(); x++)
+		// 	{
+		// 		printf("Point: %i, %i\n", contour[x].x, contour[x].y);
+		// 	}
+		// 	printf("Finished point.\n");
+		// }
+
 		if (contour.size() < 4)
 		{
 			continue;
@@ -1205,7 +1298,7 @@ void FindCardRectsInContours(const std::vector<std::vector<cv::Point>> &iContour
 
 		cv::Rect bounds = cv::boundingRect(contour);
 #ifdef DEBUGIMAGES
-		cv::Mat boundsImage(aroundCardArea, bounds);
+		// cv::Mat boundsImage(aroundCardArea, bounds);
 #endif
 		if (bounds.size().area() < 400.f)
 		{
@@ -1229,18 +1322,8 @@ void FindCardRectsInContours(const std::vector<std::vector<cv::Point>> &iContour
 			continue;
 		}
 
-		static bool guaranteeNotFullImage = false;
-		if (guaranteeNotFullImage)
-		{
-			if ((areaarea / rectArea) < 2.f)
-			{
-				continue;
-			}
-		}
-
 		cv::convexHull(contour, hull);
 		double hullarea = cv::contourArea(hull);
-		double contourarea = cv::contourArea(contour);
 		double rectness = hullarea / rectArea;
 #ifdef DEBUGIMAGES
 		std::vector<cv::Point> approx;
@@ -1275,12 +1358,8 @@ void FindCardRectsInContours(const std::vector<std::vector<cv::Point>> &iContour
 		static bool useTextBox = true;
 		if (useTextBox && rectness >= 0.95)
 		{
-			CreatePotentialRectFromPossibleTextBox(fullCardRatio, rect, path, oGoodRects);
+			CreatePotentialRectFromPossibleTextBox(fullCardRatio, rect, currentPath, oGoodRects);
 		}
-		// 		else
-		// 		{
-		// 			continue;
-		// 		}
 
 		if (inputs.myHeightSet)
 		{
@@ -1305,19 +1384,32 @@ void FindCardRectsInContours(const std::vector<std::vector<cv::Point>> &iContour
 				std::swap(rect.size.width, rect.size.height);
 				rect.angle += 90.0;
 			}
-			AddRect(PotentialRect(rect, path, contour), oGoodRects);
+			AddRect(PotentialRect(rect, currentPath, contour), oGoodRects);
 			continue;
 		}
 
 		if (oPotentialRects)
 		{
-			addPotentialRects(inputs, rect, path, contour, *oPotentialRects);
+			addPotentialRects(inputs, rect, currentPath, contour, *oPotentialRects);
 		}
 	}
 }
 
-void FindCardRects(const char *path, const cv::Mat &grayBlurredEqualized, const SearchSettings inputs, const cv::Mat &aroundCardArea, std::vector<PotentialRect> &oGoodRects, std::vector<PotentialRect> *oPotentialRects)
+// void printMatMD5(const cv::Mat &mat)
+// {
+// 	uchar md5[MD5_DIGEST_LENGTH];
+// 	MD5((unsigned char*)mat.data, mat.size().area(), 0);
+
+// 	for (int x = 0; x < MD5_DIGEST_LENGTH; ++x)
+// 	{
+// 		printf("%02x", md5[x]);
+// 	}
+// 	printf("\n");
+// }
+
+void FindCardRects(const char *path, const cv::Mat &grayBlurredEqualized, const SearchSettings inputs, std::vector<PotentialRect> &oGoodRects, std::vector<PotentialRect> *oPotentialRects)
 {
+	// cv::imwrite("grayBlurredEqualized.png", grayBlurredEqualized);
 	int thresholds[6] = {20, 40, 60, 80, 190, 220}; //in some sort of likelieness
 
 	std::vector<cv::Mat1b> thresholdMats;
@@ -1331,7 +1423,7 @@ void FindCardRects(const char *path, const cv::Mat &grayBlurredEqualized, const 
 		cv::Mat1b otherThreshold;
 		cv::bitwise_not(currentThreshold, otherThreshold);
 		thresholdMats.push_back(otherThreshold.clone());
-	}
+}
 
 	std::vector<std::vector<cv::Point>> contours;
 	std::vector<cv::Vec4i> hierarchy;
@@ -1341,18 +1433,20 @@ void FindCardRects(const char *path, const cv::Mat &grayBlurredEqualized, const 
 	{
 		const cv::Mat1b &areaThreshold = thresholdMats[i];
 		cv::findContours(areaThreshold.clone(), contours, hierarchy, cv::RETR_LIST, cv::CHAIN_APPROX_SIMPLE);
+		// cv::imwrite("threshold" + std::to_string(i) + ".png", areaThreshold);
+		// printMatMD5(areaThreshold);
 
 		if (path)
 		{
 			sprintf(buffer, "%s.%d", path, i);
 		}
-		FindCardRectsInContours(contours, inputs, aroundCardArea, oGoodRects, oPotentialRects, buffer);
+		FindCardRectsInContours(contours, inputs, oGoodRects, oPotentialRects, buffer);
 	}
 }
 
-void FindMouseRects(const char *path, cv::Mat1b grayArea, const SearchSettings inputs, const cv::Mat &aRoiMat, std::vector<PotentialRect> &oGoodRects, std::vector<PotentialRect> *oPotentialRects)
+void FindMouseRects(const char *path, cv::Mat1b grayArea, const SearchSettings inputs, std::vector<PotentialRect> &oGoodRects, std::vector<PotentialRect> *oPotentialRects)
 {
-	FindCardRects(path, grayArea, inputs, aRoiMat, oGoodRects, oPotentialRects);
+	FindCardRects(path, grayArea, inputs, oGoodRects, oPotentialRects);
 
 	static std::vector<std::vector<cv::Point>> contours;
 	contours.clear();
@@ -1375,7 +1469,7 @@ void FindMouseRects(const char *path, cv::Mat1b grayArea, const SearchSettings i
 			{
 				sprintf(buffer, "%s.canny%d", path, i);
 			}
-			FindCardRectsInContours(contours, inputs, aRoiMat, oGoodRects, oPotentialRects, buffer);
+			FindCardRectsInContours(contours, inputs, oGoodRects, oPotentialRects, buffer);
 		}
 	}
 }
@@ -1433,13 +1527,16 @@ float GetMeanPerfectRectHeight(const std::vector<PotentialRect> &potentialRects)
 void GetPossibleCards(const std::vector<PotentialRect> &someRects, std::vector<PotentialCardMatches> &oPotentialCards)
 {
 	oPotentialCards.clear();
-	for (const PotentialRect &pRect : someRects)
+	for (int rect_idx = 0; rect_idx < someRects.size(); rect_idx++)
 	{
+		const PotentialRect pRect = someRects[rect_idx];
 		bool added = false;
-		for (PotentialCardMatches &matchList : oPotentialCards)
+		for (int match_idx = 0; match_idx < oPotentialCards.size(); match_idx++)
 		{
+			PotentialCardMatches &matchList = oPotentialCards[match_idx];
 			if (matchList.myCard.Matches(pRect))
 			{
+				// std::cout << "Matched match_idx: " << match_idx << " with rect_idx: " << rect_idx << std::endl;
 				matchList.myCard.Add(pRect);
 				added = true;
 				break;
@@ -1448,6 +1545,7 @@ void GetPossibleCards(const std::vector<PotentialRect> &someRects, std::vector<P
 		if (!added)
 		{
 			oPotentialCards.push_back(pRect);
+			// std::cout << "Added new potential card match. Size after adding: " << oPotentialCards.size() << std::endl;
 		}
 	}
 }
@@ -1466,87 +1564,78 @@ bool Query::FindCardInRoi(SearchSettings &inputs, const std::vector<const CardLi
 	static std::vector<PotentialRect> potentialRects;
 	potentialRects.clear();
 
-	FindMouseRects("", grayArea, inputs, grayArea, goodRects, (useCenterFilter) ? &potentialRects : nullptr);
+	FindMouseRects("", grayArea, inputs, goodRects, (useCenterFilter) ? &potentialRects : nullptr);
 
 	cv::Mat eqMat;
 	cv::equalizeHist(grayArea, eqMat);
 
-	FindMouseRects("eq", eqMat, inputs, grayArea, goodRects, (useCenterFilter) ? &potentialRects : nullptr);
+	FindMouseRects("eq", eqMat, inputs, goodRects, (useCenterFilter) ? &potentialRects : nullptr);
 
+	// TODO: Likely unused across runs.
 	if (goodRects.size() > 0)
 	{
 		const float mean = GetMeanPerfectRectHeight(goodRects);
+		// std::cout << "Mean: " << mean << std::endl;
+
 		if (mean > 48.f)
 		{
 			if (!inputs.myHeightSet || (myIsAutoMatch && inputs.IsValidHeightPermissive(mean)))
 			{
-				if (bDebug)
-				{
-					printf("SetMeanHeight: %.2f\n", mean);
-				}
 				inputs.SetMeanHeight(mean);
 			}
 		}
 	}
 
-	static bool useCardHeightFilter = false;
-	if (useCardHeightFilter && inputs.myHeightSet)
-	{
-		potentialRects.erase(std::remove_if(potentialRects.begin(), potentialRects.end(), [&](const PotentialRect &aRect) {
-								 bool valid = inputs.IsValidPermissive(aRect.myRotatedRect);
-								 return !valid;
-							 }),
-							 potentialRects.end());
+	// std::cout << "Good rects found (pre center filter): " << goodRects.size() << " PotentialRects: " << potentialRects.size() << std::endl;
 
-		goodRects.erase(std::remove_if(goodRects.begin(), goodRects.end(), [&](const PotentialRect &aRect) {
-							bool valid = inputs.IsValidPermissive(aRect.myRotatedRect);
-#ifdef DEBUGIMAGES
-							if (!valid)
-							{
-								PotentialRect test = aRect;
-								test.CreateBaseImage(grayArea);
-							}
-#endif
-							return !valid;
-						}),
-						goodRects.end());
-	}
-
-	static bool useRotationFilter = true;
-	if (useRotationFilter && myMaxRotation > 0.f) //remove angled anything
-	{
-		potentialRects.erase(std::remove_if(potentialRects.begin(), potentialRects.end(), [&](const PotentialRect &aRect) {
-								 bool valid = inputs.IsValidPermissive(aRect.myRotatedRect);
-								 bool atAngle = fmod(aRect.myRotatedRect.angle, 90.f) > myMaxRotation;
-								 return atAngle && !valid;
-							 }),
-							 potentialRects.end());
-
-		goodRects.erase(std::remove_if(goodRects.begin(), goodRects.end(), [&](const PotentialRect &aRect) {
-							bool valid = inputs.IsValidPermissive(aRect.myRotatedRect);
-							bool atAngle = fmod(aRect.myRotatedRect.angle, 90.f) > myMaxRotation;
-							return atAngle && !valid;
-						}),
-						goodRects.end());
-	}
-
+	// Set to "true" for tests.
+	// Seems like it has a pretty good hit rate, like 75% or so.
 	if (useCenterFilter)
 	{
 		const int centerX = aRoiMat.cols / 2;
 		const int centerY = aRoiMat.rows / 2;
+		const int beforePotentialLen = (int)potentialRects.size();
+		const int beforeGoodLen = (int)goodRects.size();
+		// std::ofstream fPot("potentialRects.txt");
+		// for(auto &potentialRect : potentialRects) {
+		// 	auto rect = potentialRect.myRotatedRect;
+		// 	char buffer[50];
+		// 	sprintf(buffer, "((%.2f, %.2f), (%.2f, %.2f), %.2f)\n", rect.center.x, rect.center.y, rect.size.width, rect.size.height, rect.angle);
+		// 	fPot << buffer;
+		// }
+		// fPot.close();
+		// std::ofstream fGood("goodRects.txt");
+		// for(auto &goodRect : goodRects) {
+		// 	auto rect = goodRect.myRotatedRect;
+		// 	char buffer[50];
+		// 	sprintf(buffer, "((%.2f, %.2f), (%.2f, %.2f), %.2f)\n", rect.center.x, rect.center.y, rect.size.width, rect.size.height, rect.angle);
+		// 	fGood << buffer;
+		// }
+		// fGood.close();
 
 		auto pointOutsideRect = [&](const PotentialRect &aRect) {
-			return !PointInRect(aRect, centerX, centerY);
+			auto result = PointInRect(aRect, centerX, centerY);
+			return !result;
 		};
 		potentialRects.erase(std::remove_if(potentialRects.begin(), potentialRects.end(), pointOutsideRect), potentialRects.end());
+		// std::cout << "Finished erasing potential rects!" << std::endl;
 		goodRects.erase(std::remove_if(goodRects.begin(), goodRects.end(), pointOutsideRect), goodRects.end());
+
+		if (potentialRects.size() < beforePotentialLen || goodRects.size() < beforeGoodLen)
+		{
+			// printf("CenterFilter: %i -> %i, %i -> %i\n", beforePotentialLen, (int)potentialRects.size(), beforeGoodLen, (int)goodRects.size());
+		}
 	}
+
+	// std::cout << "Good rects found (after center filter): " << goodRects.size() << " PotentialRects: " << potentialRects.size() << std::endl;
 
 	std::vector<PotentialCardMatches> goodCards;
 	GetPossibleCards(goodRects, goodCards);
 
 	std::vector<PotentialCardMatches> rectCards;
 	GetPossibleCards(potentialRects, rectCards);
+
+	// std::cout << "Good cards: " << goodCards.size() << " Rect cards: " << rectCards.size() << std::endl;
 
 	auto cardSort = [](const PotentialCardMatches &lhs, const PotentialCardMatches &rhs) -> bool {
 		return lhs.myCard.myPotenatialRects.size() > rhs.myCard.myPotenatialRects.size();
@@ -1574,17 +1663,13 @@ bool Query::FindCardInRoi(SearchSettings &inputs, const std::vector<const CardLi
 						}),
 						rectCards.end());
 	}
-
-	int cardSum = 0;
-	for (const CardList *cardSet : iCardSets)
-	{
-		cardSum += (int)cardSet->myCardData.size();
-	}
+	// std::cout << "Good variations: " << goodVariations << " Potential variations: " << rectVariations << std::endl;
 
 	bool hasMatch = false;
 
 	hasMatch = FindCardInMouseRects(goodCards, inputs, iCardSets, grayArea, oResult);
 
+	// std::cout << "Good match score set to:" << myGoodMatchScore << std::endl;
 	if (hasMatch && oResult.myMatch.myList[0].myScore[0] < myGoodMatchScore)
 	{
 		if (useCenterFilter)
@@ -1719,23 +1804,12 @@ void GetRectVariations(const std::string &inputPath, const cv::Mat &largeImage, 
 
 bool Query::FindCardInMouseRects(std::vector<PotentialCardMatches> &iPotentialCards, const SearchSettings &inputs, const std::vector<const CardList *> &iCardSets, const cv::Mat &aroundCardArea, Result &oResult)
 {
-	// 	for (int i = 0, e = (int)iPotentialCards.size(); i < e; ++i)
-	// 	{
-	// 		for (PotentialRect& potentialRect : iPotentialCards[i].myCard.mypotenatialRects)
-	// 		{
-	// 			if (!potentialRect.myvariations.size())
-	// 			{
-	// 				potentialRect.CreateBaseImage(aroundCardArea, inputs);
-	// 			}
-	// 		}
-	// 	}
-
 	int before = TimeNow();
 	bool res = FindBestMatch(iPotentialCards, iCardSets, inputs, aroundCardArea, oResult);
 	int time = (TimeNow() - before);
 	if (bDebug && oResult.myMatch.myList.size())
 	{
-		printf("BestMatch %s in time: %ims Score: %.2f\n", oResult.myMatch.myList[0].myDatabaseCard->myCardName.c_str(), time, oResult.myMatch.myScore);
+		// printf("BestMatch %s in time: %ims Score: %.2f\n", oResult.myMatch.myList[0].myDatabaseCard->myCardName.c_str(), time, oResult.myMatch.myScore);
 	}
 
 	//	std::cout << "[BestMatch " << (TimeNow() - before) << "ms]";
@@ -1791,6 +1865,7 @@ void AddAndAverage(cv::RotatedRect &lhs, const cv::RotatedRect &rhs)
 
 void SearchSettings::SetMeanHeight(float aMeanCardHeight)
 {
+	// printf("Setting mean height to: %f\n", aMeanCardHeight);
 	SetMinMax(aMeanCardHeight * 0.8f, aMeanCardHeight * 1.2f);
 }
 
@@ -1799,6 +1874,7 @@ void SearchSettings::SetMinMax(float aMinCardHeight, float aMaxCardHeight)
 	myMinCardHeight = aMinCardHeight;
 	myMaxCardHeight = aMaxCardHeight;
 	myHeightSet = true;
+	// printf("Mean card height changed: min=%.2f, max=%.2f\n", myMinCardHeight, myMaxCardHeight);
 }
 
 bool SearchSettings::IsValidPermissive(const cv::RotatedRect &aRect) const
@@ -1850,18 +1926,33 @@ PotentialRect::PotentialRect(cv::RotatedRect aRotatedRect, const std::string &aP
 
 void PotentialRect::CreateBaseImage(const cv::Mat &area)
 {
-	const float rectArea = myRotatedRect.size.area();
-#ifdef DEBUGIMAGES
-	cv::Mat debugRect = getRotatedRectImage(myRotatedRect, area);
-#endif
 	const cv::RotatedRect &rect = myRotatedRect;
+	// std::cout << "Pre-variation center x:" << std::hexfloat << rect.center.x << std::endl;
+	// std::cout << "Pre-variation center y:" << std::hexfloat << rect.center.y << std::endl;
+	// std::cout << "Pre-variation width:" << std::hexfloat << rect.size.width << std::endl;
+	// std::cout << "Pre-variation height:" << std::hexfloat << rect.size.height << std::endl;
+	// std::cout << "Pre-variation angle:" << std::hexfloat << rect.angle << std::endl;
+	// std::cout << "The path: " << path << std::endl;
+	// std::cout << "Rect size: " << std::setprecision(12) << rect.size.width << ", " << rect.size.height << std::endl;
 
 	cv::RotatedRect modified = rect;
 	{
+		double newHeight = (double)modified.size.height * (double)1.11;
+		double newWidth = (double)modified.size.width * (double)1.11;
+		// std::cout << std::hexfloat << "New width: " << newWidth << " New height: " << newHeight << std::endl;
+
 		modified.size.height *= 1.11f; //0.9% is the real deal
 		modified.size.width *= 1.11f;
+		// std::cout << std::setprecision(12) << std::defaultfloat << "After modification: " << modified.size.width << ", " << modified.size.height << std::endl;
+		// std::cout << "Post-variation center x:" << std::hexfloat << modified.center.x << std::endl;
+		// std::cout << "Post-variation center y:" << std::hexfloat << modified.center.y << std::endl;
+		// std::cout << "Post-variation width:" << std::hexfloat << modified.size.width << std::endl;
+		// std::cout << "Post-variation height:" << std::hexfloat << modified.size.height << std::endl;
+		// std::cout << "Post-variation angle:" << std::hexfloat << modified.angle << std::endl;
 
 		cv::Mat largeImage = getRotatedRectImage(modified, area);
+		// cv::imwrite("/Users/val/dev/cardspotter/data/large_image.png", largeImage);
+
 		const bool generateUpsideDown = true; //myIsPaper;
 		GetRectVariations("", largeImage, rect, generateUpsideDown, myVariations);
 		GetRectVariations("", GetScaled(largeImage, 0.94f, 0.99f), rect, generateUpsideDown, myVariations);
@@ -1871,7 +1962,11 @@ void PotentialRect::CreateBaseImage(const cv::Mat &area)
 			CardInput &input = myVariations[x];
 			CardData &queryCard = input.myQuery;
 			queryCard.MakeHash();
+			// cv::imwrite("/Users/val/dev/cardspotter/data/icon_" + std::to_string(x) + ".png", queryCard.myIcon);
+			// cv::imwrite("/Users/val/dev/cardspotter/data/input_" + std::to_string(x) + "_" + input.myDebugPath + ".png", queryCard.myInputImage);
+			// std::cout << "idx: " << x << " Query hash: " << queryCard.GetHash().ToString() << std::endl;
 		}
+		// exit(19);
 	}
 }
 

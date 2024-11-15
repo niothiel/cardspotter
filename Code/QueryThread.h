@@ -1,4 +1,5 @@
 #pragma once
+#include "json.hpp"
 #include <thread>
 #include "CardData.h"
 #include <mutex>
@@ -6,7 +7,7 @@
 #include "CardDatabase.h"
 
 struct CardData;
-// #define DEBUGIMAGES
+#define DEBUGIMAGES
 
 typedef std::function<void(const char *aLog)> LogFunction;
 
@@ -40,6 +41,18 @@ struct PotentialRect
 	std::vector<cv::Point> myContour;
 	float GetRatio() const;
 	std::vector<CardInput> myVariations;
+
+	nlohmann::json toJson() const {
+		nlohmann::json j;
+		j["rect"] = nlohmann::json::object();
+		j["rect"]["center"] = { {"x", myRotatedRect.center.x}, {"y", myRotatedRect.center.y} };
+		j["rect"]["size"] = { {"width", myRotatedRect.size.width}, {"height", myRotatedRect.size.height} };
+		j["rect"]["angle"] = myRotatedRect.angle;
+		j["contour"] = "Not implemented";
+		j["path"] = path;
+		j["n_variations"] = myVariations.size();
+		return j;
+	}
 };
 
 struct PotentialCard
@@ -78,7 +91,20 @@ struct PotentialCard
 		if (it == myPotenatialRects.end())
 		{
 			myPotenatialRects.push_back(aPotentialRect);
+			// std::cout << "Adding new rect. Size after adding: " << myPotenatialRects.size() << std::endl;
 		}
+	}
+
+	nlohmann::json toJson() const {
+		nlohmann::json j;
+		j["center"] = { {"x", myCenter.x}, {"y", myCenter.y} };
+		j["angle"] = myAngle;
+
+		j["potential_rects"] = nlohmann::json::array();
+		for (const auto &rect : myPotenatialRects) {
+			j["potential_rects"].push_back(rect.toJson());
+		}
+		return j;
 	}
 
 	cv::Point2f myCenter;
@@ -94,6 +120,24 @@ struct PotentialCardMatches
 	PotentialCard myCard;
 	std::vector<Match> myList;
 	float myScore;
+
+	nlohmann::json toJson() const {
+		nlohmann::json j;
+		j["card"] = myCard.toJson();
+		j["matches"] = nlohmann::json::array();
+
+		int i = 0;
+		for (const Match &match : myList) {
+			nlohmann::json m;
+			m["cardId"] = match.myDatabaseCard->myCardId;
+			m["score"] = match.myScore[0];
+			m["index"] = i;
+			j["matches"].push_back(m);
+			i++;
+		}
+		j["score"] = myScore;
+		return j;
+	}
 };
 
 typedef std::function<void(int aTotal, cv::Mat anInput)> QueryStartedFunction;

@@ -1,14 +1,19 @@
 CXX = g++
 # Might want to include -Wall eventually.
-CXXFLAGS = -std=c++11 -g $(shell pkg-config --cflags openssl)
-TARGET = main
+CXXFLAGS = -g -std=c++11 $(shell pkg-config --cflags opencv4 openssl)
 SRCS = Code/CSTest.cpp Code/QueryThread.cpp Code/CardData.cpp Code/CardDatabase.cpp
 OBJS = $(SRCS:.cpp=.o)
 
 
-Code/%.o: Code/%.cpp
-	$(CXX) $(CXXFLAGS) $(shell pkg-config --cflags opencv4) -c $< -o $@
+Code/%.o: Code/%.cpp Code/%.h
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 cstest: $(OBJS)
 	echo "Objects: $(OBJS)"
-	$(CXX) $(CXXFLAGS) -fno-eliminate-unused-debug-symbols -o cstest $(OBJS) $(shell pkg-config --libs --cflags opencv4 openssl)
+	$(CXX) $(CXXFLAGS) -o cstest $(OBJS) $(shell pkg-config --libs --cflags opencv4 openssl)
+
+.PHONY: clean
+clean:
+	rm -f $(OBJS) cstest
+
+all: cstest

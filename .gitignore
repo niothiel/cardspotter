@@ -8,6 +8,8 @@ Code/emsdk/
 *.user
 rapidjson/
 /cstest
+/data
 .vs/ThaProject/v14/.suo
 History/*
 .vs/CardSpotter/v14/.suo
+/.vscode
