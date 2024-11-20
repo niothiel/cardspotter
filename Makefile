@@ -1,19 +1,19 @@
-CXX = g++
+CXX = clang++
 # Might want to include -Wall eventually.
-CXXFLAGS = -g -std=c++11 $(shell pkg-config --cflags opencv4 openssl)
+CPPFLAGS = -g -std=c++11 $(shell pkg-config --cflags opencv4 openssl)
+LDFLAGS = $(shell pkg-config --libs opencv4 openssl)
 SRCS = Code/CSTest.cpp Code/QueryThread.cpp Code/CardData.cpp Code/CardDatabase.cpp
 OBJS = $(SRCS:.cpp=.o)
 
-
-Code/%.o: Code/%.cpp Code/%.h
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+.PHONY: all
+all: cstest
 
 cstest: $(OBJS)
-	echo "Objects: $(OBJS)"
-	$(CXX) $(CXXFLAGS) -o cstest $(OBJS) $(shell pkg-config --libs --cflags opencv4 openssl)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 .PHONY: clean
 clean:
-	rm -f $(OBJS) cstest
+	rm -f $(OBJS) cstest .depend
 
-all: cstest
+# Terrible include hack to make sure that if the headers change, the objects are rebuilt.
+$(OBJS): $(wildcard Code/*.h)
