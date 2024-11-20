@@ -13,7 +13,10 @@ int main()
 {
 	std::cout << "Started test stuff" << std::endl;
 
+	const int start = TimeNow();
 	gDatabase.LoadFromTextFile("magic.db");
+	std::cout << "Loaded database in " << (TimeNow() - start) << "ms" << std::endl;
+
 	cv::setUseOptimized(false);
 	cv::setNumThreads(1);
 	query.myOkMatchScore = 280;

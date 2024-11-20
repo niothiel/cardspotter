@@ -188,6 +188,7 @@ std::string Query::TestBuffer(unsigned char* aBuffer, int aWidth, int aHeight)
 // This is the main test function that we need to emulate.
 bool Query::TestFile(const std::string &file, bool aMatchingNameOnly/*=false*/)
 {
+	const int fileStart = TimeNow();
 	const int start = (int)file.find_last_of("/") + 1;
 	int end = (int)file.find_last_of(".");
 	int parenthesis = (int)file.find_last_of("("); //multiple downloads does this
@@ -245,21 +246,22 @@ bool Query::TestFile(const std::string &file, bool aMatchingNameOnly/*=false*/)
 			break;
 		}
 	}
+	const float elapsed = (TimeNow() - fileStart) / 1000.f;
 
 	if (fIndex == 0)
 	{
-		std::cout << "[Success] Score: " << result.myMatch.myList[fIndex].myScore[0] << " Quick: " << result.myMatch.myList[fIndex].myScore[1] << " Path:" << result.myMatch.myList[fIndex].myInput.myDebugPath;
+		std::cout << "[Success] Score: " << result.myMatch.myList[fIndex].myScore[0] << " Quick: " << result.myMatch.myList[fIndex].myScore[1] << " Path:" << result.myMatch.myList[fIndex].myInput.myDebugPath << " Elapsed: " << elapsed;
 	}
 	else
 	{
 		std::cout << "[Failed ] ";
 		if (extraResult.myMatch.myList.size())
 		{
-			std::cout << "Extra Score:" << extraResult.myMatch.myList[0].myScore[0] << " Quick:" << extraResult.myMatch.myList[0].myScore[1] << " Path:" << extraResult.myMatch.myList[0].myInput.myDebugPath;
+			std::cout << "Extra Score:" << extraResult.myMatch.myList[0].myScore[0] << " Quick:" << extraResult.myMatch.myList[0].myScore[1] << " Path:" << extraResult.myMatch.myList[0].myInput.myDebugPath << " Elapsed: " << elapsed;
 		}
 		if (result.myMatch.myList.size())
 		{
-			std::cout << "Best:" << result.myMatch.myList[0].myScore[0] << " Quick:" << result.myMatch.myList[0].myScore[1] << " " << result.myMatch.myList[0].myDatabaseCard->myCardName;
+			std::cout << "Best:" << result.myMatch.myList[0].myScore[0] << " Quick:" << result.myMatch.myList[0].myScore[1] << " " << result.myMatch.myList[0].myDatabaseCard->myCardName << " Elapsed: " << elapsed;
 		}
 	}
 	std::cout << std::endl << std::endl;
