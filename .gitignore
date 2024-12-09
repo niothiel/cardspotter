@@ -8,6 +8,7 @@ Code/emsdk/
 *.user
 rapidjson/
 /cstest
+/csdb
 /data
 .vs/ThaProject/v14/.suo
 History/*

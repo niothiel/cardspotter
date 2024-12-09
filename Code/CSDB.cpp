@@ -8,23 +8,19 @@
 #include <curl/curl.h>
 #include <opencv2/core/types_c.h>
 #include <string>
+#include <sys/stat.h>
+#include <cstring>
+#include <ctype.h>
+#include <time.h>
+#include <unistd.h>
 // #pragma optimize("", off)
 
-#ifndef max
-#define max(a,b) (((a) > (b)) ? (a) : (b))
-#endif
-#ifndef min
-#define min(a,b) (((a) < (b)) ? (a) : (b))
-#endif
-
-#include <Windows.h>
 #include "CardDatabase.h"
 #include "CardData.h"
 #include "CardCurl.h"
 // #include "grfmt_png.hpp"
 #include "opencv2/core/core.hpp"
 #include "QueryThread.h"
-#include <direct.h> //mkdir n such
 
 static const char* allowHttpImageGetSet = "";
 
@@ -39,6 +35,28 @@ inline bool Deviates(cv::Vec3b value, int anotherValue, int thresh)
 		}
 	}
 	return false;
+}
+
+void _mkdir(std::string dir)
+{
+	mkdir(dir.c_str(), S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+}
+
+int stricmp(const char *str1, const char *str2) {
+	char* s1 = strdup(str1);
+    for (int i = 0; str1[i]; i++) {
+        s1[i] = tolower(str1[i]);
+    }
+
+	char* s2 = strdup(str2);
+    for (int i = 0; str2[i]; i++) {
+        s2[i] = tolower(str2[i]);
+    }
+
+	int result = strcmp(s1, s2);
+	free(s1);
+	free(s2);
+	return result;
 }
 
 inline bool HasColor(const cv::Mat& aMat, int aStartX, int anEndX, int aStartY, int anEndY, std::vector<int>& row)
@@ -129,6 +147,7 @@ cv::Rect ShrinkWrap(const cv::Mat &image)
 	return rect;
 }
 
+// Read an image from a file, remove the border from it, and resize it to 256x256, returning it in the output Mat.
 bool AutoRecut(const std::string& file, cv::Mat& outMat)
 {
 	cv::Mat image = cv::imread(file, cv::IMREAD_COLOR);
@@ -185,6 +204,7 @@ rapidjson::Document ReadJson(const char * jsonfile)
 	return d;
 }
 
+// Download PNG from Scryfall to the specified fileName.
 static bool DownloadScryfallPng(const CardData &cardData, char * fileName)
 {
 	if (IsValidCachedImageFile(fileName))
@@ -216,6 +236,7 @@ static void WriteCompressedPng(const cv::Mat& image, const char * fileName)
 	cv::imwrite(fileName, image, compression_params);
 }
 
+// Download the image from scryfall, cut it, and save it to the cutFilename.
 static bool CutImage(const CardData &cardData, char * cutFilename)
 {
 	if (strlen(allowHttpImageGetSet) > 0 && stricmp(allowHttpImageGetSet, cardData.mySetCode.c_str()) != 0)
@@ -240,6 +261,7 @@ static bool CutImage(const CardData &cardData, char * cutFilename)
 	return true;
 }
 
+// Retrieve the image from the scryfall, cut it, and save it to the cutFilename.
 static bool GetScryfallByCard(const char* /*aSet*/, CardData& cardData, cv::Mat& outImage)
 {
 	char iconFilename[FILENAME_MAX];
@@ -286,13 +308,16 @@ static bool GetScryfallByCard(const char* /*aSet*/, CardData& cardData, cv::Mat&
 
 void ScryfallBuild()
 {
+	printf("Starting database build\n");
 	CardDatabase database;
+	// database.LoadFromTextFile("magic.db");
 
 	_mkdir("scryfall");
 	const char* scryfallSets = "scryfall/scryfallsets.json";
 	std::remove(scryfallSets);
 	if (!fileExists(scryfallSets) && filesize(scryfallSets) < 100 && !CurlUrlToFile(scryfallSets, "https://api.scryfall.com/sets", 10))
 	{
+		std::cerr << "Failed to download scryfall sets. Exiting." << std::endl;
 		return;
 	}
 
@@ -303,27 +328,41 @@ void ScryfallBuild()
 	char url[FILENAME_MAX];
 	char dir[FILENAME_MAX];
 
-	for (auto setIT = setList.Begin(); setIT != setList.End(); ++setIT)
+	for (int i = 0; i < setList.Size(); i++)
 	{
-		const auto& set = *setIT;
+		const auto& set = setList[i];
+		const char* code = set["code"].GetString();
+		const char* name = set["name"].GetString();
+		const char* released_date_str = set["released_at"].GetString();
+		printf("[%4d of %4d] Processing set. [%s] %s (released %s)\n", i + 1, setList.Size(), code, name, released_date_str);
+		// if (std::find(database.mySetNames.begin(), database.mySetNames.end(), code) != database.mySetNames.end())
+		// {
+		// 	printf("Skipping set: %s (already in database)\n", code);
+		// 	continue;
+		// }
+
 		const char* set_type = set["set_type"].GetString();
+		int cardCount = set["card_count"].GetInt();
 		if (stricmp(set_type, "funny") == 0)
 		{
 			continue; //Crashes on some unglued name I think
 		}
-		const char* code = set["code"].GetString();
-		if (strncmp(code, "pmps", 4) == 0 || strncmp(code, "pcel", 4) == 0)
+		if (strncmp(code, "pmps", 4) == 0)
 		{
-			continue; 
+			continue;
+		}
+		if (cardCount == 0)
+		{
+			printf("Skipping set: %s (no cards)\n", code);
+			continue;
 		}
 		database.mySetNames.push_back(code);
 		database.mySetCards.push_back(std::vector<CardData>());
 
-
-		const char* parent_set_code = set["parent_set_code"].GetString();
 		const char* released_at = 0;
-		if (parent_set_code)
+		if (set.HasMember("parent_set_code"))
 		{
+			const char* parent_set_code = set["parent_set_code"].GetString();
 			for (auto pSetIT = setList.Begin(); pSetIT != setList.End(); ++pSetIT)
 			{
 				const auto& pset = *pSetIT;
@@ -363,20 +402,28 @@ void ScryfallBuild()
 		int page = 1;
 		while (page > 0)
 		{
+			printf("Processing page: %i\n", page);
 			sprintf(url, "https://api.scryfall.com/cards/search?order=set&q=%%2B%%2Be%%3A%s&page=%i", code, page);
 			sprintf(jsonfile, "scryfall/%s-%i.json", code, page);
 			std::cout << code << page;
 			rapidjson::Document set;
 
 			const bool exists = fileExists(jsonfile) && filesize(jsonfile) > 100;
+			const bool bigEnough = filesize(jsonfile) > 100;
 			if (exists)
 			{
 				set = ReadJson(jsonfile);
 			}
 
+			if (!bigEnough)
+			{
+				printf("File was not big enough, redownloading: %s\n", jsonfile);
+			}
+
 			if (!exists || set.HasParseError())
 			{
-				Sleep(100);
+				// 1 second
+				usleep(1000000);
 				CurlUrlToFile(jsonfile, url, 10);
 				set = ReadJson(jsonfile);
 			}
@@ -395,12 +442,6 @@ void ScryfallBuild()
 					cleanName.erase(std::remove(cleanName.begin(), cleanName.end(), '\''), cleanName.end());
 
 					const char* cardId = card["collector_number"].GetString();
-
-// 					if (stricmp(code, "iko") == 0 && stricmp(cardId, "309") == 0)
-// 					{
-// 						std::cout << " THA CARD";
-// 					}
-
 					const char* name = cleanName.c_str();
 					const char* layout = card["layout"].GetString();
 					if (stricmp(layout, "scheme") == 0)
@@ -419,7 +460,7 @@ void ScryfallBuild()
 					{
 						continue;
 					}
-					
+
 					int oldNewBasic = setformat;
 
 					if (stricmp(layout, "normal") == 0)
@@ -434,10 +475,8 @@ void ScryfallBuild()
 					{
 						continue;
 					}
-					
 
-
-					if (card["image_uris"].Size())
+					if (card.HasMember("image_uris"))
 					{
 						CardData cData;
 						cData.myCardId = cardId;
@@ -458,7 +497,7 @@ void ScryfallBuild()
 							sideA.mySetCode = code;
 							sideA.myFormat = oldNewBasic;
 							CardData sideB = sideA;
-							if (card_faces[0]["image_uris"].Size())
+							if (card_faces[0].HasMember("image_uris"))
 							{
 								sideA.myCardId += "a";
 								sideA.setImgCoreUrlFromUri(card_faces[0]["image_uris"]["png"].GetString());
@@ -467,7 +506,7 @@ void ScryfallBuild()
 
 							if (stricmp(layout, "transform") == 0)
 							{
-								if (card_faces[1]["image_uris"].Size())
+								if (card_faces[1].HasMember("image_uris"))
 								{
 									sideB.myCardId += "b";
 									sideB.setImgCoreUrlFromUri(card_faces[1]["image_uris"]["png"].GetString());
@@ -497,10 +536,13 @@ void ScryfallBuild()
 		}
 	}
 
+	printf("Finished processing set metadata. Building database..\n");
 	database.BuildDatabaseFromDisplayImages(GetScryfallByCard);
-
+	printf("Finished building database. Optimizing..\n");
 	database.Optimize();
+	printf("Saving database..\n");
 	database.SaveAsTextFile("magic.db");
+	printf("Finished!\n");
 }
 
 static bool AutoCutDisplayImage(const char* /*aSet*/, CardData& cardData, cv::Mat& outImage)
@@ -557,5 +599,5 @@ int main(int argc, char* argv[])
 	ScryfallBuild();
 // 	FolderBuild("images");
 	return 0;
-} 
+}
 

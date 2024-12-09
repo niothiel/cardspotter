@@ -5,7 +5,6 @@
 #include <sstream>
 #include <vector>
 #include <curl/curl.h>
-#include <Winhttp.h>
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
@@ -28,14 +27,6 @@ static size_t curlWriteFile(void *ptr, size_t size, size_t nmemb, FILE *stream) 
 
 static void SetCurlProxy(CURL * curl)
 {
-	WINHTTP_CURRENT_USER_IE_PROXY_CONFIG proxy;
-	if (WinHttpGetIEProxyConfigForCurrentUser(&proxy))
-	{
-		if (proxy.lpszProxy)
-		{
-			curl_easy_setopt(curl, CURLOPT_PROXY, proxy.lpszProxy);
-		}
-	}
 }
 
 static bool CurlUrlToFile(const char * outfilename, const char * url, int aTimeout = 0)
@@ -60,13 +51,15 @@ static bool CurlUrlToFile(const char * outfilename, const char * url, int aTimeo
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curlWriteFile);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
 	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, true);
-	// 		SetCurlProxy(curl);
+	curl_easy_setopt(curl, CURLOPT_FAILONERROR, true);
+
 	res = curl_easy_perform(curl);
 	/* always cleanup */
 	curl_easy_cleanup(curl);
 	fclose(fp);
 
-	Sleep(1500);
+	// Sleep to avoid spamming the APIs
+	usleep(1000000);
 
 	return res == CURLcode::CURLE_OK;
 }
@@ -120,7 +113,7 @@ static bool GetGathererImageById(const char* aSet, const CardData& cardData, cv:
 	}
 
 	std::remove(outfilename);
-	sprintf(url, gurl, cardData.myCardId);
+	sprintf(url, gurl, cardData.myCardId.c_str());
 	if (CurlUrlToFile(outfilename, url, 3))
 	{
 		outImage = cv::imread(outfilename, cv::IMREAD_UNCHANGED);
@@ -167,7 +160,7 @@ static bool CacheImageById(const char* anImageId)
 
 	//ANIMATED AFTER
 // 	sprintf(outfilename, "%s/CardSpotter/Cache/%s.gif", appData, anImageId);
-// 
+//
 // 	if (!fileExists(outfilename))
 // 	{
 // 		sprintf(url, "http://wow.zamimg.com/images/hearthstone/cards/enus/animated/%s_premium.gif", anImageId);

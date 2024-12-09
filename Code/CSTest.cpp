@@ -5,7 +5,6 @@
 #include "CardDatabase.h"
 
 //#pragma optimize("",off)
-const char* cardPool = "priest of titania";
 CardDatabase gDatabase;
 Query query(gDatabase);
 
@@ -44,8 +43,6 @@ int main()
 		// exit(29);
 	}
 	const int before = TimeNow();
-
-// 	gDatabase.SetCardPool(cardPool, strlen(cardPool));
 
 	int testTime = 0;
 	int succeeded = 0;

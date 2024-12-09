@@ -6,3 +6,9 @@ It works by grabbing data from HTML5 video, extracting the clicked card using Op
 [50s demo recorded for 2.0](https://www.youtube.com/watch?v=-vKsLunV8Kg)
 
 If you wish to modify CardSpotter this wiki page should get you started: [How to modify CardSpotter](https://github.com/relgin/cardspotter/wiki/How-to-modify-CardSpotter)
+
+# Setup Instructions
+
+Needs:
+
+`brew install asio` (for CrowCpp)
